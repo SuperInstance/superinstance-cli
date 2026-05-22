@@ -11,7 +11,7 @@ import click
 
 
 # ---------------------------------------------------------------------------
-# Pure-Python fallback implementations (used when ecosystem packages absent)
+# Core functions
 # ---------------------------------------------------------------------------
 
 def _check_bounds(value: float, lower: float, upper: float) -> dict:
@@ -28,40 +28,32 @@ def _laman_edges(vertices: int) -> int:
     return 2 * vertices - 3
 
 
-def _is_rigid(vertices: int, edges: int) -> dict:
+def _is_rigid(vertices: int, edges: int) -> bool:
     """Check if a graph topology satisfies Laman rigidity conditions."""
     if vertices < 2:
         raise ValueError("Vertices must be >= 2")
     if edges < 0:
         raise ValueError("Edges must be >= 0")
-    min_edges = 2 * vertices - 3
-    rigid = edges >= min_edges
-    return {"rigid": rigid, "vertices": vertices, "edges": edges, "min_edges": min_edges}
+    return edges >= 2 * vertices - 3
 
 
-def _eisenstein_norm(a: int, b: int) -> float:
+def _eisenstein_norm(a: float, b: float) -> float:
     """Eisenstein integer norm: a² - ab + b²."""
-    return float(a * a - a * b + b * b)
+    return a * a - a * b + b * b
 
 
-def _pythagorean48_encode(x: int, y: int) -> int:
+def _pythagorean48_encode(x: float, y: float) -> int:
     """Pythagorean-48 direction encoding."""
-    if x == 0 and y == 0:
-        return 0
-    # Map (x,y) to one of 48 directional bins
     angle = math.atan2(y, x)
-    if angle < 0:
-        angle += 2 * math.pi
-    sector = int(angle / (2 * math.pi) * 48) % 48
+    sector = int(round(angle / (2 * math.pi) * 48)) % 48
     return sector
 
 
 def _deadband_filter(value: float, baseline: float, threshold: float) -> dict:
     """Apply deadband filter: pass value only if it deviates beyond threshold."""
     delta = abs(value - baseline)
-    passed = delta > threshold
-    result = value if passed else baseline
-    return {"result": result, "passed": passed, "delta": delta, "threshold": threshold}
+    passed = delta >= threshold
+    return {"passed": passed, "value": value, "baseline": baseline, "delta": delta, "threshold": threshold, "result": value if passed else baseline}
 
 
 # ---------------------------------------------------------------------------
@@ -82,15 +74,16 @@ def cli():
 def check(value: float, lower: float, upper: float):
     """Check if VALUE is within [LOWER, UPPER] bounds (Eisenstein math)."""
     result = _check_bounds(value, lower, upper)
-    status = "✓ IN RANGE" if result["in_range"] else "✗ OUT OF RANGE"
-    click.echo(f"Value {value} vs [{lower}, {upper}]: {status}")
     if result["in_range"]:
+        click.echo(f"✓ IN RANGE: Value {value} vs [{lower}, {upper}]")
         click.echo(f"  Margin: {result['margin']:.4f}")
+    else:
+        click.echo(f"✗ OUT OF RANGE: Value {value} vs [{lower}, {upper}]")
 
 
-@cli.command()
+@cli.command("edges")
 @click.argument("vertices", type=int)
-def edges(vertices: int):
+def edges_(vertices: int):
     """Calculate minimum edges for Laman rigidity (2V - 3)."""
     try:
         result = _laman_edges(vertices)
@@ -102,32 +95,35 @@ def edges(vertices: int):
 
 @cli.command()
 @click.argument("vertices", type=int)
-@click.argument("edges_", metavar="EDGES", type=int)
+@click.argument("edges_", type=int)
 def rigid(vertices: int, edges_: int):
     """Check if topology with VERTICES and EDGES is rigid."""
     try:
         result = _is_rigid(vertices, edges_)
-        status = "✓ RIGID" if result["rigid"] else "✗ NOT RIGID"
-        click.echo(f"{vertices} vertices, {edges_} edges: {status}")
-        click.echo(f"  Minimum required: {result['min_edges']}")
+        min_edges = _laman_edges(vertices)
+        if result:
+            click.echo(f"✓ RIGID: {vertices} vertices, {edges_} edges")
+        else:
+            click.echo(f"✗ NOT RIGID: {vertices} vertices, {edges_} edges")
+            click.echo(f"  Minimum required: {min_edges}")
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
 @cli.command()
-@click.argument("a", type=int)
-@click.argument("b", type=int)
-def norm(a: int, b: int):
+@click.argument("a", type=float)
+@click.argument("b", type=float)
+def norm(a: float, b: float):
     """Calculate Eisenstein integer norm (a² - ab + b²)."""
     result = _eisenstein_norm(a, b)
     click.echo(f"Eisenstein norm ({a}, {b}): {result}")
 
 
 @cli.command()
-@click.argument("x", type=int)
-@click.argument("y", type=int)
-def encode(x: int, y: int):
+@click.argument("x", type=float)
+@click.argument("y", type=float)
+def encode(x: float, y: float):
     """Encode direction (X, Y) as Pythagorean-48 sector."""
     result = _pythagorean48_encode(x, y)
     click.echo(f"Pythagorean-48 encoding ({x}, {y}): sector {result}")
@@ -148,31 +144,26 @@ def filter_(value: float, baseline: float, threshold: float):
 @cli.command()
 def benchmark():
     """Run quick benchmarks of core operations."""
-    iterations = 100_000
+    iterations = 100000
+    t0 = time.time()
+    for _ in range(iterations):
+        _check_bounds(0.5, 0.0, 1.0)
+    t_bounds = time.time() - t0
 
-    # Bounds check
-    t0 = time.perf_counter()
-    for i in range(iterations):
-        _check_bounds(float(i), 0.0, float(iterations))
-    t_bounds = time.perf_counter() - t0
-
-    # Laman edges
-    t0 = time.perf_counter()
-    for i in range(iterations):
+    t0 = time.time()
+    for _ in range(iterations):
         _laman_edges(100)
-    t_laman = time.perf_counter() - t0
+    t_laman = time.time() - t0
 
-    # Eisenstein norm
-    t0 = time.perf_counter()
-    for i in range(iterations):
-        _eisenstein_norm(i % 100, (i + 1) % 100)
-    t_norm = time.perf_counter() - t0
+    t0 = time.time()
+    for _ in range(iterations):
+        _eisenstein_norm(0.5, 1.0)
+    t_norm = time.time() - t0
 
-    # Deadband filter
-    t0 = time.perf_counter()
-    for i in range(iterations):
-        _deadband_filter(float(i), float(i) + 0.5, 1.0)
-    t_filter = time.perf_counter() - t0
+    t0 = time.time()
+    for _ in range(iterations):
+        _deadband_filter(0.5, 1.0, 0.1)
+    t_filter = time.time() - t0
 
     click.echo(f"Benchmark results ({iterations:,} iterations each):")
     click.echo(f"  Bounds check:     {t_bounds:.4f}s ({iterations / t_bounds:.0f} ops/s)")
@@ -185,24 +176,18 @@ def benchmark():
 def status():
     """Print SuperInstance ecosystem status."""
     click.echo("SuperInstance Ecosystem Status")
-    click.echo("=" * 40)
+    click.echo("========================================")
     click.echo(f"  CLI version:  0.1.0")
     click.echo(f"  Python:       {sys.version.split()[0]}")
-
-    # Check for ecosystem packages
-    packages = {
-        "numpy": "numpy",
-        "scipy": "scipy",
-        "sympy": "sympy",
-    }
-    click.echo("\n  Packages:")
-    for name, import_name in packages.items():
+    packages = {}
+    for pkg in ["numpy", "scipy", "sympy"]:
         try:
-            mod = __import__(import_name)
-            ver = getattr(mod, "__version__", "unknown")
-            click.echo(f"    {name}: {ver}")
+            mod = __import__(pkg)
+            packages[pkg] = getattr(mod, "__version__", "unknown")
         except ImportError:
-            click.echo(f"    {name}: not installed")
-
+            packages[pkg] = "not installed"
+    click.echo("\n  Packages:")
+    for pkg, ver in packages.items():
+        click.echo(f"    {pkg}: {ver}")
     click.echo("\n  Languages: Rust, Python, TypeScript")
     click.echo("  Status: Operational ✓")
